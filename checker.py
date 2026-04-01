@@ -8,7 +8,6 @@ from typing import Any
 import base64
 import html
 import re
-import shutil
 import sys
 
 import requests
@@ -40,7 +39,6 @@ def safe(s: str) -> str:
 
 
 def fmt_msk_from_ms(ms: int) -> str:
-    # MSK is UTC+3; minute precision.
     dt_utc = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
     dt_msk = dt_utc + timedelta(hours=3)
     return dt_msk.strftime("%d.%m.%Y %H:%M")
@@ -100,12 +98,6 @@ def extract_text_preview_200(msg: dict[str, Any]) -> str:
     return text[:200]
 
 
-def escape_markdown_v2(text: str) -> str:
-    # Escape Telegram MarkdownV2 special characters.
-    # https://core.telegram.org/bots/api#markdownv2-style
-    return re.sub(r"([_\*\[\]\(\)~`>#+\-=|{}\.!\\])", r"\\\1", text or "")
-
-
 def render_template(template: str, mapping: dict[str, str]) -> str:
     out = template
     for k, v in mapping.items():
@@ -114,7 +106,6 @@ def render_template(template: str, mapping: dict[str, str]) -> str:
 
 
 def markdown_bold_to_html(tmpl: str) -> str:
-    # Minimal conversion: **bold** -> <b>bold</b>
     return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", tmpl, flags=re.DOTALL)
 
 
@@ -138,7 +129,6 @@ def get_headers(msg: dict[str, Any]) -> dict[str, str]:
 
 def tg_send(token: str, chat_id: str, text: str, dry_run: bool, *, parse_mode: str | None) -> str | None:
     if dry_run:
-        # Avoid UnicodeEncodeError on some Windows consoles.
         first_line = (text.splitlines() or [""])[0]
         enc = sys.stdout.encoding or "utf-8"
         safe_first = first_line.encode(enc, errors="backslashreplace").decode(enc, errors="ignore")
@@ -157,7 +147,6 @@ def tg_send(token: str, chat_id: str, text: str, dry_run: bool, *, parse_mode: s
         },
         timeout=20,
     )
-    # Helpful when something goes wrong (e.g., bot not in chat, blocked, etc.).
     if not r.ok:
         raise RuntimeError(f"Telegram send failed: status={r.status_code} body={r.text}")
     r.raise_for_status()
@@ -205,58 +194,13 @@ def safe_json_list(s: str) -> list[str]:
     return []
 
 
-def ensure_mailbox_row(ws, mailbox: str, *, subject_phrase: str, gmail_query_base: str) -> tuple[int, dict[str, int]]:
-    # Returns (row_number, col_index_map)
-    values = ws.get_all_values()
-    if not values:
-        raise RuntimeError("mailboxes sheet has no header row")
-
-    headers = values[0]
-    col = {h.strip(): i + 1 for i, h in enumerate(headers) if h.strip()}
-    required = ["mailbox", "enabled", "subject_phrase", "gmail_query_base", "last_internal_ms", "last_sent_ids_json", "updated_at_utc", "notes"]
-    for r in required:
-        if r not in col:
-            raise RuntimeError(f"mailboxes sheet missing required column: {r}")
-
-    target = mailbox.strip().lower()
-    for idx, row in enumerate(values[1:], start=2):
-        if row and row[0].strip().lower() == target:
-            return idx, col
-
-    ws.append_row(
-        [
-            mailbox,
-            "TRUE",
-            subject_phrase,
-            gmail_query_base,
-            "0",
-            "[]",
-            now_utc_iso(),
-            "auto-added by checker.py",
-        ],
-        value_input_option="RAW",
-    )
-    # Re-fetch (row numbers may shift in collaborative edits).
-    values = ws.get_all_values()
-    for idx, row in enumerate(values[1:], start=2):
-        if row and row[0].strip().lower() == target:
-            return idx, col
-    raise RuntimeError("failed to create/find mailbox row")
+def strip_dotzero(val: str) -> str:
+    if val.endswith(".0"):
+        return val[:-2]
+    return val
 
 
-def ws_get(ws, row: int, col: int) -> str:
-    return ws.cell(row, col).value or ""
-
-
-def ws_update_row(ws, row: int, col_map: dict[str, int], updates: dict[str, str]) -> None:
-    for k, v in updates.items():
-        c = col_map.get(k)
-        if not c:
-            continue
-        ws.update_cell(row, c, v)
-
-
-def load_setup_sheet(ws) -> dict[str, str]:
+def load_key_value_sheet(ws) -> dict[str, str]:
     values = ws.get_all_values()
     if not values:
         return {}
@@ -268,44 +212,119 @@ def load_setup_sheet(ws) -> dict[str, str]:
         if key.startswith("#"):
             continue
         val = row[1].strip() if len(row) > 1 else ""
-        # Google Sheets may convert negative chat IDs to float (e.g. "-5012137290.0").
-        if val.endswith(".0"):
-            val = val[:-2]
+        val = strip_dotzero(val)
         if key and val:
             out[key] = val
     return out
 
 
+def read_mailboxes_sheet(ws) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    values = ws.get_all_values()
+    if not values:
+        raise RuntimeError("mailboxes sheet has no header row")
+
+    headers = [h.strip() for h in values[0]]
+    col = {h: i + 1 for i, h in enumerate(headers) if h.strip()}
+    required = ["mailbox", "enabled", "subject_phrase", "gmail_query_base", "tg_chat_id", "tags_string", "last_internal_ms", "last_sent_ids_json", "updated_at_utc", "notes"]
+    for r in required:
+        if r not in col:
+            raise RuntimeError(f"mailboxes sheet missing required column: {r}")
+
+    mailboxes: list[dict[str, Any]] = []
+    for idx, row in enumerate(values[1:], start=2):
+        if not row or not row[0]:
+            continue
+        mb_email = row[col["mailbox"] - 1].strip()
+        if not mb_email:
+            continue
+
+        def cell_val(key: str) -> str:
+            c = col.get(key)
+            if c is None:
+                return ""
+            v = row[c - 1] if len(row) >= c else ""
+            return strip_dotzero(str(v).strip())
+
+        last_sent = safe_json_list(cell_val("last_sent_ids_json"))
+        last_ms = parse_int(cell_val("last_internal_ms"), 0)
+
+        mailboxes.append({
+            "row": idx,
+            "mailbox": mb_email,
+            "enabled": parse_bool(cell_val("enabled")),
+            "subject_phrase": cell_val("subject_phrase"),
+            "gmail_query_base": cell_val("gmail_query_base") or "in:inbox",
+            "tg_chat_id": cell_val("tg_chat_id"),
+            "tags_string": cell_val("tags_string"),
+            "last_internal_ms": last_ms,
+            "last_sent_ids": last_sent,
+            "initialized": last_ms > 0,
+            "updated_at_utc": cell_val("updated_at_utc"),
+            "notes": cell_val("notes"),
+        })
+
+    return mailboxes, col
+
+
+def ws_update_cell(ws, row: int, col_idx: int, value: str) -> None:
+    ws.update_cell(row, col_idx, value)
+
+
+def ensure_mailbox_exists(ws, col: dict[str, int], mailbox: str, *, subject_phrase: str, gmail_query_base: str, tg_chat_id: str = "", tags_string: str = "") -> None:
+    values = ws.get_all_values()
+    if not values:
+        raise RuntimeError("mailboxes sheet has no header row")
+
+    target = mailbox.strip().lower()
+    for idx, row in enumerate(values[1:], start=2):
+        if row and row[0].strip().lower() == target:
+            return
+
+    ws.append_row(
+        [
+            mailbox,
+            "TRUE",
+            subject_phrase,
+            gmail_query_base,
+            tg_chat_id,
+            tags_string,
+            "0",
+            "[]",
+            now_utc_iso(),
+            "auto-added by checker.py",
+        ],
+        value_input_option="RAW",
+    )
+
+
 def main() -> int:
     load_env()
 
-    # Hardcoded production spreadsheet URL.
     spreadsheet_url = "https://docs.google.com/spreadsheets/d/1SS5RanpLrtGHfHgePqWSDRm-57XSRK5TKNecc4FYUfI/edit"
     sheets_sa_path = os.getenv("GOOGLE_SHEETS_SA_JSON_PATH", r"C:\Rubrain\Secrets\service_account.json")
+    sa_path = os.getenv("GOOGLE_SA_JSON_PATH")
+
     if not os.path.exists(sheets_sa_path):
         print(f"Sheets service account JSON not found: {sheets_sa_path}")
         return 2
-
-    # 0) Load Gmail credentials and mailbox identity FIRST (from .env).
-    sa_path = os.getenv("GOOGLE_SA_JSON_PATH")
-    mailbox = os.getenv("GMAIL_IMPERSONATE") or os.getenv("MAILBOX_1_EMAIL") or "info@freelance.kz"
-    if not sa_path or not mailbox:
-        print("Missing GOOGLE_SA_JSON_PATH or GMAIL_IMPERSONATE in env")
-        return 2
-    if not os.path.exists(sa_path):
-        print(f"Service account JSON not found: {sa_path}")
+    if not sa_path or not os.path.exists(sa_path):
+        print(f"Gmail service account JSON not found: {sa_path}")
         return 2
 
     tg_token = os.getenv("TG_TOKEN") or os.getenv("TG_BOT_TOKEN")
+    tg_dry_run = (os.getenv("TG_DRY_RUN", "false").strip().lower() != "false")
+
+    if not tg_token and not tg_dry_run:
+        print("Missing TG token. Set TG_TOKEN (or enable TG_DRY_RUN=true)")
+        return 2
 
     gc = sheets_client(sheets_sa_path)
     sh = gc.open_by_url(spreadsheet_url)
 
-    # 1) Load global config from "config" sheet (key, value, description).
-    #    Config sheet OVERRIDES .env for operational settings.
+    # Load global config from "config" sheet.
     try:
         config_ws = sh.worksheet("config")
-        cfg = load_setup_sheet(config_ws)
+        cfg = load_key_value_sheet(config_ws)
         for k, v in cfg.items():
             os.environ[k] = v
             print(f"[config] applied {k}={v}")
@@ -313,50 +332,11 @@ def main() -> int:
         print("[warn] 'config' sheet not found; using .env defaults")
         cfg = {}
 
-    # Resolve chat IDs from config into env for downstream logic.
-    def resolve_chat_ref(ref: str) -> str:
-        ref = ref.strip()
-        if not ref:
-            return ""
-        if ref.startswith("TG_CHAT_ID") or ref.startswith("CHAT_ID"):
-            # Try exact match first, then with/without TG_ prefix.
-            for candidate in [ref, "TG_" + ref, ref.replace("TG_", "", 1)]:
-                val = cfg.get(candidate) or os.getenv(candidate, "")
-                if val:
-                    s = str(val).strip()
-                    if s.endswith(".0"):
-                        s = s[:-2]
-                    return s
-        return ref
-
-    tg_chat_ref = os.getenv("TG_CHAT_REF", "TG_CHAT_ID_1")
-    tg_chat = resolve_chat_ref(tg_chat_ref)
-
-    # If config sheet didn't resolve, try .env fallbacks.
-    if not tg_chat or tg_chat == tg_chat_ref:
-        for fallback_key in [tg_chat_ref, "TG_" + tg_chat_ref, tg_chat_ref.replace("TG_", "", 1), "CHAT_ID_1", "TG_CHAT_ID_1"]:
-            raw = os.getenv(fallback_key)
-            if raw:
-                s = str(raw).split("#", 1)[0].strip()
-                if s.endswith(".0"):
-                    s = s[:-2]
-                if s:
-                    tg_chat = s
-                    break
-
-    tg_dry_run = (os.getenv("TG_DRY_RUN", "false").strip().lower() != "false")
-
     # Guardrail: block group/channel sends unless explicitly allowed.
     allow_non_personal = os.getenv("TG_ALLOW_NON_PERSONAL", "false").strip().lower()
-    if not allow_non_personal and tg_chat:
-        if tg_chat.startswith("@") or tg_chat.startswith("-"):
-            print(f"Refusing to send to '{tg_chat}' without TG_ALLOW_NON_PERSONAL=true")
-            return 2
 
     poll_s = int(os.getenv("POLL_INTERVAL_SECONDS", "60"))
     max_results = int(os.getenv("GMAIL_MAX_RESULTS", "20"))
-    subject_phrase = os.getenv("SUBJECT_PHRASE", "Новое сообщение на Freelance.kz")
-    base_query = os.getenv("GMAIL_QUERY", "in:inbox")
     bootstrap = os.getenv("BOOTSTRAP", "skip_existing").strip().lower()
 
     template_path = Path(os.getenv("FORMAT_PATH", "format.md"))
@@ -379,321 +359,208 @@ def main() -> int:
 
     parse_mode = os.getenv("TG_PARSE_MODE", "HTML")
 
-    if not tg_token and not tg_dry_run:
-        print("Missing TG token. Set TG_TOKEN (or enable TG_DRY_RUN=true)")
-        return 2
-    if not tg_chat:
-        print("Missing TG chat id. Set TG_CHAT_REF or TG_CHAT_ID_1 in config/.env")
-        return 2
-
-    gmail = build_gmail(sa_path, mailbox)
-
     mailboxes_ws = sh.worksheet("mailboxes")
     events_ws = sh.worksheet("events")
 
-    # 2) Load per-mailbox routing from "setup" sheet (initial load; refreshed in loop).
-    routing: dict[str, dict[str, str]] = {}
-    try:
-        setup_ws = sh.worksheet("setup")
-    except gspread.WorksheetNotFound:
-        print("[warn] 'setup' sheet not found; using defaults")
-        setup_ws = None
+    # Cache for Gmail clients: mailbox -> client
+    gmail_clients: dict[str, Any] = {}
 
-    row_num, col = ensure_mailbox_row(mailboxes_ws, mailbox, subject_phrase=subject_phrase, gmail_query_base=base_query)
-
-    enabled = parse_bool(ws_get(mailboxes_ws, row_num, col["enabled"]))
-    subject_phrase = ws_get(mailboxes_ws, row_num, col["subject_phrase"]) or subject_phrase
-    base_query = ws_get(mailboxes_ws, row_num, col["gmail_query_base"]) or base_query
-    query = f'{base_query} subject:"{subject_phrase}"'
-    last_internal_ms = parse_int(ws_get(mailboxes_ws, row_num, col["last_internal_ms"]), 0)
-    last_sent_ids = safe_json_list(ws_get(mailboxes_ws, row_num, col["last_sent_ids_json"]))
-    initialized = last_internal_ms > 0
-
-    print("Checker params:")
-    print(f"- mailbox: {mailbox}")
-    print(f"- query: {query}")
-    print(f"- subject_phrase: {subject_phrase}")
-    print(f"- poll_s: {poll_s}")
-    print(f"- max_results: {max_results}")
-    print(f"- last_internal_ms: {last_internal_ms} ({utc_iso_from_ms(last_internal_ms)})")
-    print(f"- bootstrap: {bootstrap}")
-    print(f"- tg_chat: {tg_chat}")
-    print(f"- tg_dry_run: {tg_dry_run}")
-    print(f"- template: {template_path}")
-    print(f"- tg_parse_mode: {parse_mode}")
-    print(f"- sheets: {spreadsheet_url}")
-    print(f"- enabled: {enabled}")
+    print(f"[init] checker started, poll_interval={poll_s}s, bootstrap={bootstrap}, dry_run={tg_dry_run}")
+    print(f"[init] template={template_path}, parse_mode={parse_mode}")
 
     loop_counter = 0
     while True:
         loop_counter += 1
         print(f"\n{'='*60}")
-        print(f"[loop #{loop_counter}] starting poll cycle at {datetime.now(timezone.utc).isoformat()}")
-        print(f"[loop] monitoring mailbox: {mailbox}")
+        print(f"[loop #{loop_counter}] starting at {datetime.now(timezone.utc).isoformat()}")
+
         try:
-            # 1) Refresh config from Sheets each loop.
-            print(f"[config] reading config sheet...")
+            # 1) Refresh global config.
             try:
-                new_cfg = load_setup_sheet(sh.worksheet("config"))
+                new_cfg = load_key_value_sheet(sh.worksheet("config"))
                 for k, v in new_cfg.items():
                     os.environ[k] = v
-                new_tg_chat_ref = os.getenv("TG_CHAT_REF", tg_chat_ref)
-                if new_tg_chat_ref != tg_chat_ref:
-                    tg_chat_ref = new_tg_chat_ref
-                    tg_chat = resolve_chat_ref(tg_chat_ref)
-                    print(f"[config] TG_CHAT_REF changed to {tg_chat_ref} -> resolved chat: {tg_chat}")
-                else:
-                    print(f"[config] config OK, tg_chat={tg_chat}")
+                print(f"[config] refreshed {len(new_cfg)} keys")
             except gspread.WorksheetNotFound:
-                print(f"[config] config sheet not found, skipping")
                 pass
 
-            # 2) Refresh per-mailbox routing from "setup" sheet each loop.
-            print(f"[setup] reading setup sheet...")
-            try:
-                setup_values = sh.worksheet("setup").get_all_values()
-                if setup_values and len(setup_values) > 1:
-                    setup_headers = [h.strip().lower() for h in setup_values[0]]
-                    col_map_setup = {h: i for i, h in enumerate(setup_headers)}
-                    new_routing: dict[str, dict[str, str]] = {}
-                    for row in setup_values[1:]:
-                        if not row or not row[0]:
-                            continue
-                        mb = row[col_map_setup.get("mailbox", 0)].strip().lower()
-                        phrase = row[col_map_setup.get("key_phrases", 1)].strip() if len(row) > 1 else ""
-                        chat_ref = row[col_map_setup.get("tg_chat", 2)].strip() if len(row) > 2 else ""
-                        tags = row[col_map_setup.get("tags_string", 3)].strip() if len(row) > 3 else ""
-                        if mb:
-                            new_routing[mb] = {
-                                "subject_phrase": phrase,
-                                "tg_chat_ref": chat_ref,
-                                "tags_string": tags,
-                            }
-                    routing = new_routing
-                    print(f"[setup] loaded {len(routing)} mailboxes: {list(routing.keys())}")
-                    current_route = routing.get(mailbox.strip().lower(), {})
-                    print(f"[setup] current mailbox route: phrases={current_route.get('subject_phrase','')!r} tg_chat_ref={current_route.get('tg_chat_ref','')!r} tags={current_route.get('tags_string','')!r}")
-                else:
-                    print(f"[setup] setup sheet is empty or has only headers")
-            except gspread.WorksheetNotFound:
-                print(f"[setup] setup sheet not found, skipping")
-                pass
-            except Exception as e:
-                print(f"[setup] read error: {type(e).__name__}: {e}")
+            # 2) Read ALL mailboxes from the unified mailboxes sheet.
+            mailboxes, col_map = read_mailboxes_sheet(mailboxes_ws)
+            enabled_mbs = [mb for mb in mailboxes if mb["enabled"]]
+            print(f"[mailboxes] total={len(mailboxes)} enabled={len(enabled_mbs)} {[mb['mailbox'] for mb in enabled_mbs]}")
 
-            # 3) Refresh mailbox config/state from Sheets.
-            print(f"[mailbox] reading state from mailboxes sheet...")
-            enabled = parse_bool(ws_get(mailboxes_ws, row_num, col["enabled"]))
-            subject_phrase = ws_get(mailboxes_ws, row_num, col["subject_phrase"]) or subject_phrase
-            base_query = ws_get(mailboxes_ws, row_num, col["gmail_query_base"]) or base_query
-            query = f'{base_query} subject:"{subject_phrase}"'
-            last_internal_ms = parse_int(ws_get(mailboxes_ws, row_num, col["last_internal_ms"]), last_internal_ms)
-            last_sent_ids = safe_json_list(ws_get(mailboxes_ws, row_num, col["last_sent_ids_json"])) or last_sent_ids
+            for mb in mailboxes:
+                email = mb["mailbox"]
+                row = mb["row"]
 
-            print(f"[mailbox] enabled={enabled} query={query!r}")
-            print(f"[mailbox] last_internal_ms={last_internal_ms} ({utc_iso_from_ms(last_internal_ms)})")
-            print(f"[mailbox] last_sent_ids count={len(last_sent_ids)} initialized={initialized}")
-
-            # If sent_ids were cleared (e.g. user set [] in sheet), reset initialization
-            # so the checker re-evaluates existing mail.
-            if not last_sent_ids:
-                print(f"[mailbox] sent_ids cleared, resetting initialization")
-                initialized = False
-                last_internal_ms = 0
-
-            # 4) Apply per-mailbox routing overrides from setup sheet.
-            route = routing.get(mailbox.strip().lower())
-            if route:
-                print(f"[route] applying routing overrides for {mailbox}")
-                if route.get("subject_phrase"):
-                    subject_phrase = route["subject_phrase"]
-                    query = f'{base_query} subject:"{subject_phrase}"'
-                    print(f"[route] subject_phrase overridden to: {subject_phrase!r}")
-                    print(f"[route] query updated to: {query!r}")
-                if route.get("tg_chat_ref"):
-                    old_chat = tg_chat
-                    tg_chat = resolve_chat_ref(route["tg_chat_ref"])
-                    print(f"[route] tg_chat_ref={route['tg_chat_ref']!r} resolved to: {tg_chat} (was {old_chat})")
-            else:
-                print(f"[route] no routing overrides for {mailbox}")
-
-            if not enabled:
-                print(f"[mailbox] DISABLED, skipping poll")
-                time.sleep(poll_s)
-                continue
-
-            # 5) Query Gmail API.
-            print(f"[gmail] querying: {query!r} maxResults={max_results}")
-            resp = (
-                gmail.users()
-                .messages()
-                .list(userId="me", labelIds=["INBOX"], q=query, maxResults=max_results)
-                .execute()
-            )
-            msgs = resp.get("messages", []) or []
-            print(f"[gmail] API returned {len(msgs)} message IDs")
-
-            newest_seen = last_internal_ms
-            candidates: list[dict[str, Any]] = []
-            to_notify: list[dict[str, Any]] = []
-
-            for m in msgs:
-                mid = m.get("id")
-                if not mid:
+                if not mb["enabled"]:
+                    print(f"[mb:{email}] DISABLED, skipping")
                     continue
-                msg = (
-                    gmail.users()
-                    .messages()
-                    .get(userId="me", id=mid, format="full")
-                    .execute()
-                )
-                internal_ms_raw = msg.get("internalDate")
-                internal_ms = int(internal_ms_raw) if internal_ms_raw else 0
-                newest_seen = max(newest_seen, internal_ms)
 
-                headers = get_headers(msg)
-                subj = headers.get("subject", "")
-                if subject_phrase not in subj:
-                    print(f"[gmail] SKIP msg {mid[:12]}... subject does not contain phrase {subject_phrase!r}: {subj!r}")
+                print(f"[mb:{email}] enabled=True phrase={mb['subject_phrase']!r} query_base={mb['gmail_query_base']!r}")
+                print(f"[mb:{email}] tg_chat_id={mb['tg_chat_id']!r} tags={mb['tags_string']!r}")
+                print(f"[mb:{email}] last_internal_ms={mb['last_internal_ms']} initialized={mb['initialized']} sent_ids={len(mb['last_sent_ids'])}")
+
+                # If sent_ids were cleared, reset initialization.
+                if not mb["last_sent_ids"]:
+                    print(f"[mb:{email}] sent_ids cleared, resetting initialization")
+                    mb["initialized"] = False
+                    mb["last_internal_ms"] = 0
+
+                # Build or reuse Gmail client.
+                if email not in gmail_clients:
+                    print(f"[mb:{email}] creating new Gmail API client")
+                    gmail_clients[email] = build_gmail(sa_path, email)
+                gmail = gmail_clients[email]
+
+                # Resolve chat ID.
+                tg_chat = mb["tg_chat_id"]
+                if not tg_chat:
+                    # Fallback: try config keys.
+                    for fallback in ["TG_CHAT_ID_1", "CHAT_ID_1"]:
+                        raw = os.getenv(fallback)
+                        if raw:
+                            tg_chat = strip_dotzero(str(raw).strip())
+                            break
+                if not tg_chat:
+                    print(f"[mb:{email}] SKIP: no tg_chat_id configured")
                     continue
-                print(f"[gmail] CANDIDATE msg {mid[:12]}... subject={subj!r} internalDate={internal_ms}")
-                candidates.append(msg)
 
-            print(f"[filter] {len(candidates)} candidates matching subject phrase")
+                # Guardrail check per-mailbox.
+                if not allow_non_personal and tg_chat.startswith("-"):
+                    print(f"[mb:{email}] BLOCKED: tg_chat={tg_chat} is a group/channel and TG_ALLOW_NON_PERSONAL is not true")
+                    continue
 
-            if not initialized:
-                print(f"[init] not initialized, bootstrap mode={bootstrap}")
-                if bootstrap == "skip_existing":
-                    cp = 0
-                    for msg in candidates:
-                        ms_raw = msg.get("internalDate")
-                        ms = int(ms_raw) if ms_raw else 0
-                        cp = max(cp, ms)
-                    if cp <= 0:
-                        cp = int(time.time() * 1000)
+                subject_phrase = mb["subject_phrase"]
+                base_query = mb["gmail_query_base"]
+                query = f'{base_query} subject:"{subject_phrase}"'
+                print(f"[mb:{email}] query={query!r}")
 
-                    initialized = True
-                    last_internal_ms = cp
-                    ws_update_row(
-                        mailboxes_ws, row_num, col,
+                # 3) Query Gmail API.
+                resp = gmail.users().messages().list(userId="me", labelIds=["INBOX"], q=query, maxResults=max_results).execute()
+                msgs = resp.get("messages", []) or []
+                print(f"[mb:{email}] API returned {len(msgs)} message IDs")
+
+                candidates: list[dict[str, Any]] = []
+                for m in msgs:
+                    mid = m.get("id")
+                    if not mid:
+                        continue
+                    msg = gmail.users().messages().get(userId="me", id=mid, format="full").execute()
+                    internal_ms = int(msg.get("internalDate") or 0)
+                    headers = get_headers(msg)
+                    subj = headers.get("subject", "")
+                    if subject_phrase not in subj:
+                        print(f"[mb:{email}] SKIP msg {mid[:12]}... subject mismatch: {subj!r}")
+                        continue
+                    print(f"[mb:{email}] CANDIDATE msg {mid[:12]}... subj={subj!r} ts={internal_ms}")
+                    msg["_internal_ms"] = internal_ms
+                    candidates.append(msg)
+
+                print(f"[mb:{email}] {len(candidates)} candidates after subject filter")
+
+                # 4) Bootstrap if not initialized.
+                if not mb["initialized"]:
+                    print(f"[mb:{email}] not initialized, bootstrap={bootstrap}")
+                    if bootstrap == "skip_existing":
+                        cp = 0
+                        for msg in candidates:
+                            cp = max(cp, msg["_internal_ms"])
+                        if cp <= 0:
+                            cp = int(time.time() * 1000)
+
+                        mb["initialized"] = True
+                        mb["last_internal_ms"] = cp
+                        ws_update_cell(mailboxes_ws, row, col_map["last_internal_ms"], str(cp))
+                        ws_update_cell(mailboxes_ws, row, col_map["last_sent_ids_json"], "[]")
+                        ws_update_cell(mailboxes_ws, row, col_map["updated_at_utc"], now_utc_iso())
+                        ws_update_cell(mailboxes_ws, row, col_map["notes"], "checkpoint initialized")
+
+                        events_ws.append_row(
+                            [now_utc_iso(), "INFO", "GmailChecker", email, "init_checkpoint", "", str(cp), "", subject_phrase, "", tg_chat, "", ""],
+                            value_input_option="RAW",
+                        )
+                        print(f"[mb:{email}] checkpoint set to {utc_iso_from_ms(cp)}")
+                        continue
+                    mb["initialized"] = True
+                    print(f"[mb:{email}] bootstrap={bootstrap}, marking initialized without checkpoint")
+
+                # 5) Filter against known IDs and timestamp.
+                to_notify: list[dict[str, Any]] = []
+                for msg in candidates:
+                    mid = str(msg.get("id") or "")
+                    if mid in mb["last_sent_ids"]:
+                        print(f"[mb:{email}] SKIP msg {mid[:12]}... already sent")
+                        continue
+                    internal_ms = msg["_internal_ms"]
+                    if internal_ms < mb["last_internal_ms"]:
+                        print(f"[mb:{email}] SKIP msg {mid[:12]}... ts={internal_ms} < checkpoint={mb['last_internal_ms']}")
+                        continue
+                    print(f"[mb:{email}] TO NOTIFY msg {mid[:12]}... ts={internal_ms}")
+                    to_notify.append(msg)
+
+                print(f"[mb:{email}] {len(to_notify)} messages to notify")
+
+                # 6) Send notifications.
+                to_notify.sort(key=lambda x: x["_internal_ms"])
+                sent_any = False
+                for msg in to_notify:
+                    headers = get_headers(msg)
+                    subj = safe(headers.get("subject", ""))
+                    from_ = safe(headers.get("from", ""))
+                    internal_ms = msg["_internal_ms"]
+
+                    date_msk = fmt_msk_from_ms(internal_ms) if internal_ms else ""
+                    preview_raw = extract_text_preview_200(msg)
+                    preview = html.escape(preview_raw)
+                    from_html = html.escape(from_)
+                    subj_html = html.escape(subj)
+                    mailbox_html = html.escape(email)
+                    date_html = html.escape(date_msk)
+
+                    tmpl_html = markdown_bold_to_html(get_template())
+
+                    tags = mb["tags_string"] or os.getenv("DEFAULT_TAGS", "")
+
+                    print(f"[mb:{email}] SEND msg {msg.get('id','')[:12]}... from={from_!r} subj={subj!r} -> tg_chat={tg_chat}")
+
+                    text = render_template(
+                        tmpl_html,
                         {
-                            "last_internal_ms": str(last_internal_ms),
-                            "last_sent_ids_json": json.dumps(last_sent_ids[-50:], ensure_ascii=True),
-                            "updated_at_utc": now_utc_iso(),
-                            "notes": "checkpoint initialized",
+                            "<email>": mailbox_html,
+                            "<from>": from_html,
+                            "<subject>": subj_html,
+                            "<dd.mm.yyyy HH:MM>": date_html,
+                            "<first 150 characters of the email body>": preview[:150],
+                            "<first 200 characters of the email body>": preview[:200],
+                            "<tags>": tags,
                         },
                     )
+
+                    tg_mid = tg_send(tg_token or "", tg_chat, text, tg_dry_run, parse_mode=parse_mode)
+                    mb["last_internal_ms"] = max(mb["last_internal_ms"], internal_ms)
+                    mb["last_sent_ids"].append(str(msg.get("id") or ""))
+                    mb["last_sent_ids"] = [x for x in mb["last_sent_ids"] if x][-50:]
+                    sent_any = True
+
                     events_ws.append_row(
-                        [
-                            now_utc_iso(), "INFO", "GmailChecker", mailbox,
-                            "init_checkpoint", "", str(last_internal_ms), "",
-                            subject_phrase, "", tg_chat, "", "",
-                        ],
+                        [now_utc_iso(), "INFO", "GmailChecker", email, "sent", str(msg.get("id") or ""), str(internal_ms), from_, subj, preview_raw[:200], tg_chat, tg_mid or "", ""],
                         value_input_option="RAW",
                     )
-                    print(f"[init] checkpoint set to {utc_iso_from_ms(last_internal_ms)}")
-                    time.sleep(poll_s)
-                    continue
-                initialized = True
-                print(f"[init] bootstrap={bootstrap}, marking as initialized without checkpoint")
 
-            # 6) Filter candidates against last_sent_ids and last_internal_ms.
-            print(f"[notify] filtering {len(candidates)} candidates against {len(last_sent_ids)} known IDs and last_internal_ms={last_internal_ms}")
-            for msg in candidates:
-                mid = str(msg.get("id") or "")
-                if not mid or mid in last_sent_ids:
-                    if mid in last_sent_ids:
-                        print(f"[notify] SKIP msg {mid[:12]}... already in last_sent_ids")
-                    continue
-                internal_ms_raw = msg.get("internalDate")
-                internal_ms = int(internal_ms_raw) if internal_ms_raw else 0
-                if internal_ms < last_internal_ms:
-                    print(f"[notify] SKIP msg {mid[:12]}... internal_ms={internal_ms} < last_internal_ms={last_internal_ms}")
-                    continue
-                print(f"[notify] TO NOTIFY msg {mid[:12]}... internal_ms={internal_ms}")
-                to_notify.append(msg)
-
-            print(f"[notify] {len(to_notify)} messages to notify")
-
-            # 7) Send notifications.
-            to_notify.sort(key=lambda x: int(x.get("internalDate") or 0))
-            sent_any = False
-            for msg in to_notify:
-                headers = get_headers(msg)
-                subj = safe(headers.get("subject", ""))
-                from_ = safe(headers.get("from", ""))
-                internal_ms_raw = msg.get("internalDate")
-                internal_ms = int(internal_ms_raw) if internal_ms_raw else 0
-
-                date_msk = fmt_msk_from_ms(internal_ms) if internal_ms else ""
-                preview_raw = extract_text_preview_200(msg)
-                preview = html.escape(preview_raw)
-                from_html = html.escape(from_)
-                subj_html = html.escape(subj)
-                mailbox_html = html.escape(mailbox)
-                date_html = html.escape(date_msk)
-
-                tmpl_md = get_template()
-                tmpl_html = markdown_bold_to_html(tmpl_md)
-
-                tags = ""
-                if route and route.get("tags_string"):
-                    tags = route["tags_string"]
+                if sent_any:
+                    print(f"[mb:{email}] updating state: last_ms={mb['last_internal_ms']} sent_ids={len(mb['last_sent_ids'])}")
+                    ws_update_cell(mailboxes_ws, row, col_map["last_internal_ms"], str(mb["last_internal_ms"]))
+                    ws_update_cell(mailboxes_ws, row, col_map["last_sent_ids_json"], json.dumps(mb["last_sent_ids"][-50:], ensure_ascii=True))
+                    ws_update_cell(mailboxes_ws, row, col_map["updated_at_utc"], now_utc_iso())
                 else:
-                    tags = os.getenv("DEFAULT_TAGS", "")
-
-                print(f"[send] msg {msg.get('id','')[:12]}... from={from_!r} subj={subj!r} tg_chat={tg_chat}")
-
-                text = render_template(
-                    tmpl_html,
-                    {
-                        "<email>": mailbox_html,
-                        "<from>": from_html,
-                        "<subject>": subj_html,
-                        "<dd.mm.yyyy HH:MM>": date_html,
-                        "<first 150 characters of the email body>": preview[:150],
-                        "<first 200 characters of the email body>": preview[:200],
-                        "<tags>": tags,
-                    },
-                )
-
-                tg_mid = tg_send(tg_token or "", tg_chat, text, tg_dry_run, parse_mode=parse_mode)
-                last_internal_ms = max(last_internal_ms, internal_ms)
-                last_sent_ids.append(str(msg.get("id") or ""))
-                last_sent_ids = [x for x in last_sent_ids if x][-50:]
-                sent_any = True
-
-                events_ws.append_row(
-                    [
-                        now_utc_iso(), "INFO", "GmailChecker", mailbox,
-                        "sent", str(msg.get("id") or ""), str(internal_ms),
-                        from_, subj, preview_raw[:200], tg_chat, tg_mid or "", "",
-                    ],
-                    value_input_option="RAW",
-                )
-
-            if sent_any:
-                print(f"[state] updating mailboxes sheet with new checkpoint")
-                ws_update_row(
-                    mailboxes_ws, row_num, col,
-                    {
-                        "last_internal_ms": str(last_internal_ms),
-                        "last_sent_ids_json": json.dumps(last_sent_ids[-50:], ensure_ascii=True),
-                        "updated_at_utc": now_utc_iso(),
-                    },
-                )
-            else:
-                print(f"[state] no new messages, state unchanged")
+                    print(f"[mb:{email}] no new messages")
 
         except Exception as e:
             print(f"[error] {type(e).__name__}: {e}")
             try:
                 events_ws.append_row(
-                    [
-                        now_utc_iso(), "ERROR", "GmailChecker", mailbox,
-                        "error", "", "", "", "", "", tg_chat, "",
-                        f"{type(e).__name__}: {e}",
-                    ],
+                    [now_utc_iso(), "ERROR", "GmailChecker", "", "error", "", "", "", "", "", "", "", f"{type(e).__name__}: {e}"],
                     value_input_option="RAW",
                 )
             except Exception:

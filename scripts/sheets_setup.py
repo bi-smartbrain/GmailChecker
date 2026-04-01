@@ -11,6 +11,8 @@ MAILBOX_HEADERS = [
     "enabled",
     "subject_phrase",
     "gmail_query_base",
+    "tg_chat_id",
+    "tags_string",
     "last_internal_ms",
     "last_sent_ids_json",
     "updated_at_utc",
@@ -45,10 +47,7 @@ def main() -> int:
         print(f"Service account JSON not found: {sa_path}")
         return 2
 
-    spreadsheet_url = os.getenv("SPREADSHEET_URL")
-    if not spreadsheet_url:
-        print("Missing SPREADSHEET_URL in env")
-        return 2
+    spreadsheet_url = os.getenv("SPREADSHEET_URL", "https://docs.google.com/spreadsheets/d/1SS5RanpLrtGHfHgePqWSDRm-57XSRK5TKNecc4FYUfI/edit")
 
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -104,63 +103,67 @@ def main() -> int:
     mailboxes_ws, _ = ensure_sheet("mailboxes", MAILBOX_HEADERS)
     ensure_sheet("events", EVENT_HEADERS)
 
-    # 3) config (global key/value settings)
     config_headers = ["key", "value", "description"]
     config_ws, _ = ensure_sheet("config", config_headers)
 
     config_values = config_ws.get_all_values()
     config_keys = {r[0].strip() for r in config_values[1:] if r and r[0].strip()}
     if "TG_ALLOW_NON_PERSONAL" not in config_keys:
-        config_ws.append_row(["TG_ALLOW_NON_PERSONAL", "false", "Block group/channel sends unless true"], value_input_option="RAW")
-    if "TG_CHAT_REF" not in config_keys:
-        config_ws.append_row(["TG_CHAT_REF", "TG_CHAT_ID_1", "Which config key resolves the destination chat"], value_input_option="RAW")
+        config_ws.append_row(["TG_ALLOW_NON_PERSONAL", "true", "Block group/channel sends unless true"], value_input_option="RAW")
     if "POLL_INTERVAL_SECONDS" not in config_keys:
-        config_ws.append_row(["POLL_INTERVAL_SECONDS", "60", "Seconds between polls"], value_input_option="RAW")
+        config_ws.append_row(["POLL_INTERVAL_SECONDS", "15", "Seconds between polls"], value_input_option="RAW")
     if "BOOTSTRAP" not in config_keys:
         config_ws.append_row(["BOOTSTRAP", "skip_existing", "skip_existing|notify_existing"], value_input_option="RAW")
     if "TG_CHAT_ID_1" not in config_keys:
-        config_ws.append_row(["TG_CHAT_ID_1", "", "Your personal TG chat id"], value_input_option="RAW")
+        config_ws.append_row(["TG_CHAT_ID_1", "302376278", "Personal chat"], value_input_option="RAW")
     if "TG_CHAT_ID_5" not in config_keys:
-        config_ws.append_row(["TG_CHAT_ID_5", "", "Common TG group chat id"], value_input_option="RAW")
+        config_ws.append_row(["TG_CHAT_ID_5", "302376278", "Support chat"], value_input_option="RAW")
+    if "TG_CHAT_ID_6" not in config_keys:
+        config_ws.append_row(["TG_CHAT_ID_6", "-5012137290", "Debug group"], value_input_option="RAW")
     print("Seeded config sheet defaults.")
 
-    # 4) setup (per-mailbox routing: mailbox, key_phrases, tg_chat, tags_string)
-    setup_headers = ["mailbox", "key_phrases", "tg_chat", "tags_string"]
-    setup_ws, _ = ensure_sheet("setup", setup_headers)
-
-    # Seed setup rows from existing mailboxes if missing.
-    setup_values = setup_ws.get_all_values()
-    setup_mailboxes = {r[0].strip().lower() for r in setup_values[1:] if r and r[0].strip()}
-    if "info@freelance.kz" not in setup_mailboxes:
-        setup_ws.append_row(["info@freelance.kz", "Новое сообщение на Freelance.kz", "TG_CHAT_ID_1", ""], value_input_option="RAW")
-        print("Seeded setup row: info@freelance.kz")
-
-    # Seed the main mailbox row if missing.
-    seed_mailbox = os.getenv("SEED_MAILBOX", "info@freelance.kz")
-    subject_phrase = os.getenv("SUBJECT_PHRASE", "Новое сообщение на Freelance.kz")
-    gmail_query_base = os.getenv("GMAIL_QUERY", "in:inbox")
+    seed_mailboxes = [
+        {
+            "email": "info@freelance.kz",
+            "subject_phrase": "Новое сообщение на Freelance.kz",
+            "gmail_query_base": "in:inbox",
+            "tg_chat_id": "302376278",
+            "tags_string": "@karyushka @aglaya_smartbrainio @katrinkee @TsaritsaPolei @olya_smartbrain",
+        },
+        {
+            "email": "info@unicheck.ai",
+            "subject_phrase": "Новое письмо",
+            "gmail_query_base": "in:inbox",
+            "tg_chat_id": "302376278",
+            "tags_string": "@karyushka",
+        },
+    ]
 
     values = mailboxes_ws.get_all_values()
-    start_idx = 1 if values and values[0][: len(MAILBOX_HEADERS)] == MAILBOX_HEADERS else 0
-    existing_mailboxes = {r[0].strip().lower() for r in values[start_idx:] if r and len(r) > 0 and r[0].strip()}
-    if seed_mailbox.strip().lower() not in existing_mailboxes:
-        now = datetime.now(timezone.utc).isoformat()
-        mailboxes_ws.append_row(
-            [
-                seed_mailbox,
-                "TRUE",
-                subject_phrase,
-                gmail_query_base,
-                "0",
-                "[]",
-                now,
-                "seeded by sheets_setup.py",
-            ],
-            value_input_option="RAW",
-        )
-        print(f"Seeded mailbox row: {seed_mailbox}")
-    else:
-        print(f"Mailbox row already exists: {seed_mailbox}")
+    existing_mailboxes = {r[0].strip().lower() for r in values[1:] if r and len(r) > 0 and r[0].strip()}
+
+    for seed in seed_mailboxes:
+        email = seed["email"]
+        if email.strip().lower() not in existing_mailboxes:
+            now = datetime.now(timezone.utc).isoformat()
+            mailboxes_ws.append_row(
+                [
+                    email,
+                    "TRUE",
+                    seed["subject_phrase"],
+                    seed["gmail_query_base"],
+                    seed["tg_chat_id"],
+                    seed["tags_string"],
+                    "0",
+                    "[]",
+                    now,
+                    "seeded by sheets_setup.py",
+                ],
+                value_input_option="RAW",
+            )
+            print(f"Seeded mailbox row: {email}")
+        else:
+            print(f"Mailbox row already exists: {email}")
 
     print("Setup complete.")
     return 0

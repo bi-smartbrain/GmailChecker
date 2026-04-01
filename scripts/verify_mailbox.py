@@ -193,18 +193,22 @@ def main():
 
     print()
     print("=" * 80)
-    print("ENV CHECK")
+    print("ARCHITECTURE NOTE")
     print("=" * 80)
-    gmail_mb = os.getenv("GMAIL_IMPERSONATE") or os.getenv("MAILBOX_1_EMAIL", "info@freelance.kz")
-    print(f"  GMAIL_IMPERSONATE / MAILBOX_1_EMAIL = {gmail_mb!r}")
-    print(f"  This is the ONLY mailbox checker.py currently monitors!")
+    print("  checker.py now monitors ALL enabled mailboxes from the mailboxes sheet.")
+    print("  No .env GMAIL_IMPERSONATE needed — just add rows to the sheet!")
     print()
-    if gmail_mb != "info@unicheck.ai":
-        print(f"  [CRITICAL] checker.py is monitoring '{gmail_mb}', NOT 'info@unicheck.ai'!")
-        print(f"  To monitor info@unicheck.ai, you would need to:")
-        print(f"    1. Change GMAIL_IMPERSONATE in .env to info@unicheck.ai, OR")
-        print(f"    2. Run a second instance of checker.py with different .env, OR")
-        print(f"    3. Refactor checker.py to monitor ALL mailboxes from the mailboxes sheet")
+    enabled_count = 0
+    for row in mb_values[1:]:
+        if not row or not row[0]:
+            continue
+        mb = row[mb_col_map.get("mailbox", 0)].strip().lower()
+        if "@" not in mb:
+            continue
+        en = row[mb_col_map.get("enabled", 1)].strip().lower() if len(row) > 1 else ""
+        if en == "true":
+            enabled_count += 1
+    print(f"  {enabled_count} mailbox(es) enabled and will be monitored by checker.py")
 
 if __name__ == "__main__":
     main()
