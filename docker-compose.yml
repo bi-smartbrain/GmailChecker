@@ -1,0 +1,18 @@
+services:
+  gmail-checker:
+    build: .
+    image: gmail-checker:latest
+    container_name: gmail-checker
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Europe/Moscow
+    volumes:
+      - /opt/secrets:/secrets:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"

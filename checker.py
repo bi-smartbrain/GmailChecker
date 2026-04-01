@@ -62,6 +62,11 @@ def cprint(msg: str) -> None:
 
 
 def load_env() -> None:
+    try:
+        import env_loader
+        return
+    except FileNotFoundError:
+        pass
     default_dotenv = r"C:\Rubrain\Secrets\.env"
     dotenv_path = os.getenv("DOTENV_PATH", default_dotenv)
     if os.path.exists(dotenv_path):
