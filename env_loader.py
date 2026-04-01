@@ -15,6 +15,10 @@ def setup_environment():
     secrets_path = get_secrets_path()
     env_file_path = os.path.join(secrets_path, '.env')
     load_dotenv(env_file_path)
+
+    os.environ.setdefault('GOOGLE_SHEETS_SA_JSON_PATH', os.path.join(secrets_path, 'service_account.json'))
+    os.environ.setdefault('GOOGLE_SA_JSON_PATH', os.path.join(secrets_path, 'service_account_freelance.json'))
+
     return secrets_path
 
 
