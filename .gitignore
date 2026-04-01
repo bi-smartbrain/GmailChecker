@@ -10,3 +10,8 @@ __pycache__/
 .env
 *.env
 *.json
+
+# Local runtime state
+state.json
+state.json.bak
+state.json.tmp
