@@ -104,6 +104,37 @@ def main() -> int:
     mailboxes_ws, _ = ensure_sheet("mailboxes", MAILBOX_HEADERS)
     ensure_sheet("events", EVENT_HEADERS)
 
+    # 3) config (global key/value settings)
+    config_headers = ["key", "value", "description"]
+    config_ws, _ = ensure_sheet("config", config_headers)
+
+    config_values = config_ws.get_all_values()
+    config_keys = {r[0].strip() for r in config_values[1:] if r and r[0].strip()}
+    if "TG_ALLOW_NON_PERSONAL" not in config_keys:
+        config_ws.append_row(["TG_ALLOW_NON_PERSONAL", "false", "Block group/channel sends unless true"], value_input_option="RAW")
+    if "TG_CHAT_REF" not in config_keys:
+        config_ws.append_row(["TG_CHAT_REF", "TG_CHAT_ID_1", "Which config key resolves the destination chat"], value_input_option="RAW")
+    if "POLL_INTERVAL_SECONDS" not in config_keys:
+        config_ws.append_row(["POLL_INTERVAL_SECONDS", "60", "Seconds between polls"], value_input_option="RAW")
+    if "BOOTSTRAP" not in config_keys:
+        config_ws.append_row(["BOOTSTRAP", "skip_existing", "skip_existing|notify_existing"], value_input_option="RAW")
+    if "TG_CHAT_ID_1" not in config_keys:
+        config_ws.append_row(["TG_CHAT_ID_1", "", "Your personal TG chat id"], value_input_option="RAW")
+    if "TG_CHAT_ID_5" not in config_keys:
+        config_ws.append_row(["TG_CHAT_ID_5", "", "Common TG group chat id"], value_input_option="RAW")
+    print("Seeded config sheet defaults.")
+
+    # 4) setup (per-mailbox routing: mailbox, key_phrases, tg_chat, tags_string)
+    setup_headers = ["mailbox", "key_phrases", "tg_chat", "tags_string"]
+    setup_ws, _ = ensure_sheet("setup", setup_headers)
+
+    # Seed setup rows from existing mailboxes if missing.
+    setup_values = setup_ws.get_all_values()
+    setup_mailboxes = {r[0].strip().lower() for r in setup_values[1:] if r and r[0].strip()}
+    if "info@freelance.kz" not in setup_mailboxes:
+        setup_ws.append_row(["info@freelance.kz", "Новое сообщение на Freelance.kz", "TG_CHAT_ID_1", ""], value_input_option="RAW")
+        print("Seeded setup row: info@freelance.kz")
+
     # Seed the main mailbox row if missing.
     seed_mailbox = os.getenv("SEED_MAILBOX", "info@freelance.kz")
     subject_phrase = os.getenv("SUBJECT_PHRASE", "Новое сообщение на Freelance.kz")
