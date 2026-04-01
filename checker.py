@@ -427,6 +427,13 @@ def main() -> int:
             except gspread.WorksheetNotFound:
                 pass
 
+            # Re-read operational variables from os.environ so hot-reload works.
+            poll_s = int(os.getenv("POLL_INTERVAL_SECONDS", str(poll_s)))
+            max_results = int(os.getenv("GMAIL_MAX_RESULTS", str(max_results)))
+            bootstrap = os.getenv("BOOTSTRAP", bootstrap).strip().lower()
+            tg_dry_run = (os.getenv("TG_DRY_RUN", "false").strip().lower() != "false")
+            allow_non_personal = os.getenv("TG_ALLOW_NON_PERSONAL", "false").strip().lower()
+
             # 2) Read ALL mailboxes from the unified mailboxes sheet.
             mailboxes, col_map = read_mailboxes_sheet(mailboxes_ws)
             enabled_mbs = [mb for mb in mailboxes if mb["enabled"]]
