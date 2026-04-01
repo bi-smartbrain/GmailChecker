@@ -413,10 +413,21 @@ def main() -> int:
                     gmail_clients[email] = build_gmail(sa_path, email)
                 gmail = gmail_clients[email]
 
-                # Resolve chat ID.
-                tg_chat = mb["tg_chat_id"]
+                # Resolve chat ID: if tg_chat_id looks like a config key (e.g. TG_CHAT_ID_1), resolve it.
+                raw_chat = mb["tg_chat_id"]
+                tg_chat = ""
+                if raw_chat:
+                    if raw_chat.startswith("TG_CHAT_ID") or raw_chat.startswith("CHAT_ID"):
+                        for candidate in [raw_chat, "TG_" + raw_chat, raw_chat.replace("TG_", "", 1)]:
+                            val = os.getenv(candidate)
+                            if val:
+                                tg_chat = strip_dotzero(str(val).strip())
+                                break
+                        if not tg_chat:
+                            print(f"[mb:{email}] WARN: tg_chat_id={raw_chat!r} not found in config/env")
+                    else:
+                        tg_chat = strip_dotzero(raw_chat)
                 if not tg_chat:
-                    # Fallback: try config keys.
                     for fallback in ["TG_CHAT_ID_1", "CHAT_ID_1"]:
                         raw = os.getenv(fallback)
                         if raw:

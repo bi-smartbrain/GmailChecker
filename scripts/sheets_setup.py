@@ -127,14 +127,14 @@ def main() -> int:
             "email": "info@freelance.kz",
             "subject_phrase": "Новое сообщение на Freelance.kz",
             "gmail_query_base": "in:inbox",
-            "tg_chat_id": "302376278",
+            "tg_chat_id": "TG_CHAT_ID_1",
             "tags_string": "@karyushka @aglaya_smartbrainio @katrinkee @TsaritsaPolei @olya_smartbrain",
         },
         {
             "email": "info@unicheck.ai",
             "subject_phrase": "Новое письмо",
             "gmail_query_base": "in:inbox",
-            "tg_chat_id": "302376278",
+            "tg_chat_id": "TG_CHAT_ID_1",
             "tags_string": "@karyushka",
         },
     ]
