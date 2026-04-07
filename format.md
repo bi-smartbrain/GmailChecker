@@ -4,9 +4,9 @@
 **От:** <from>
 **Тема:** <subject>
 
-**Текст:** <first 150 characters of the email body>
+**Текст:** <text>
 --------
-@karyushka @TsaritsaPolei @aglaya_smartbrainio @katrinkee  @olya_smartbrain
+<tags>
 ---
 Источник: GmailChecker
-Триггер: ключевая фраза в теме письма "Новое сообщение на Freelance.kz"
+Триггер: ключевая фраза в теме письма "<trigger_phrase>"

@@ -113,7 +113,7 @@ def iter_payload_parts(payload: dict[str, Any]):
             yield from iter_payload_parts(p)
 
 
-def extract_text_preview_200(msg: dict[str, Any]) -> str:
+def extract_text_preview(msg: dict[str, Any]) -> str:
     payload = msg.get("payload") or {}
 
     plain_candidates: list[str] = []
@@ -132,7 +132,7 @@ def extract_text_preview_200(msg: dict[str, Any]) -> str:
 
     text = ""
     for t in plain_candidates:
-        t = safe(t)
+        t = t.replace("\r", " ").strip()
         if t:
             text = t
             break
@@ -141,9 +141,11 @@ def extract_text_preview_200(msg: dict[str, Any]) -> str:
         text = strip_html(html_candidates[0])
 
     if not text:
-        text = safe(msg.get("snippet", ""))
+        snippet = msg.get("snippet", "")
+        snippet = html.unescape(snippet)
+        text = snippet.replace("\r", " ").strip()
 
-    return text[:200]
+    return text[:300]
 
 
 def render_template(template: str, mapping: dict[str, str]) -> str:
@@ -578,7 +580,7 @@ def main() -> int:
                     internal_ms = msg["_internal_ms"]
 
                     date_msk = fmt_msk_from_ms(internal_ms) if internal_ms else ""
-                    preview_raw = extract_text_preview_200(msg)
+                    preview_raw = extract_text_preview(msg)
                     preview = html.escape(preview_raw)
                     from_html = html.escape(from_)
                     subj_html = html.escape(subj)
@@ -598,9 +600,9 @@ def main() -> int:
                             "<from>": from_html,
                             "<subject>": subj_html,
                             "<dd.mm.yyyy HH:MM>": date_html,
-                            "<first 150 characters of the email body>": preview[:150],
-                            "<first 200 characters of the email body>": preview[:200],
-                            "<tags>": tags,
+                            "<text>": preview,
+                            "<tags>": html.escape(tags),
+                            "<trigger_phrase>": html.escape(subject_phrase),
                         },
                     )
 
