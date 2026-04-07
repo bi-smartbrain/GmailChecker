@@ -1,24 +1,26 @@
 set -e
 
-echo "=== Быстрое обновление GmailChecker ==="
+echo "=== Безопасное обновление GmailChecker ==="
 
-# 1. Останавливаем и удаляем старый контейнер
-echo "1. Останавливаем контейнер..."
+# 1. Обновляем код из git
+echo "1. Обновляем код..."
 cd /opt/GmailChecker
-docker-compose down
+git fetch origin master
+git reset --hard origin/master
 
-# 2. Обновляем код из git
-echo "2. Обновляем код..."
-git reset --hard HEAD
-git pull origin master
+# 2. Пересобираем и перезапускаем сервис без лишнего даунтайма
+echo "2. Пересобираем и запускаем контейнер..."
+docker-compose up -d --build --remove-orphans
 
-# 3. Пересобираем образ
-echo "3. Пересобираем образ..."
-docker-compose build
+# 3. Чистим неиспользуемые образы и build cache (safe)
+echo "3. Чистим Docker мусор (safe)..."
+docker image prune -f
+docker builder prune -f --filter "until=168h"
 
-# 4. Запускаем контейнер
-echo "4. Запускаем контейнер..."
-docker-compose up -d
+# 4. Обновляем скрипт в /opt/auto
+echo "4. Обновляем /opt/auto/update_GmailChecker.sh..."
+cp scripts/update_GmailChecker.sh /opt/auto/update_GmailChecker.sh
+chmod +x /opt/auto/update_GmailChecker.sh
 
 echo "=== Обновление завершено ==="
-echo "=== Контейнер запущен ==="
+echo "=== Контейнер запущен, cleanup выполнен ==="
