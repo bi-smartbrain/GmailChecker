@@ -15,3 +15,6 @@ __pycache__/
 state.json
 state.json.bak
 state.json.tmp
+
+# Auto-update script (local copy from prod)
+scripts/update_GmailChecker.auto.sh

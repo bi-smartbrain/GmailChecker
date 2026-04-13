@@ -89,7 +89,16 @@ git reset --hard HEAD
 git pull origin master
 docker-compose build
 docker-compose up -d
+# Safe cleanup: remove unused images, keep builds for 168h
+docker image prune -f
+docker builder prune -f --filter "until=168h"
+# Self-update: copy to /opt/auto/ for future runs
+cp "$(dirname "$0")/update_<Project>.sh" /opt/auto/update_<Project>.sh 2>/dev/null || true
 ```
+
+### Локальные скрипты
+- `scripts/update_GmailChecker.sh` — локальная копия авто-скрипта (обновляется при push)
+- `scripts/update_GmailChecker.auto.sh` — копия с прод сервера, добавлена в `.gitignore`
 
 ## Частые задачи
 
@@ -115,3 +124,13 @@ docker-compose up -d
 4. **IMAP заблокирован** Google Workspace — только Gmail API + DWD
 5. **Gmail API не помечает письма как прочитанные** — это намеренное поведение
 6. **last_sent_ids_json** хранит последние 50 ID — защита от дубликатов
+7. **Навыки (skills)** для AI-ассистента: отдельный репозиторий `git@github.com:bi-smartbrain/smartbrain-rules.git`
+   - Содержит: `about-me`, `server-deploy`, `gmail-dwd`, `sheets-config`, `telegram-bot`, `colored-logging`
+   - Клонировать в `C:\Users\<user>\.config\opencode\skills\` для обнаружения OpenCode
+
+## Ключевые функции
+
+- `strip_dotzero()` — utils.py, очистка `.0` из float значений Google Sheets
+- `load_gmail_client()` — создание/кэширование Gmail API клиента с DWD
+- `extract_text_preview()` — извлечение текстового превью из письма (до 300 символов)
+- `send_telegram()` — отправка уведомления с HTML formatting и guardrails

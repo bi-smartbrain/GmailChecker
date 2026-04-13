@@ -133,6 +133,10 @@ def extract_text_preview(msg: dict[str, Any]) -> str:
     text = ""
     for t in plain_candidates:
         t = t.replace("\r", " ").strip()
+        t = html.unescape(t)          # decode &nbsp; &amp; &lt; etc.
+        t = t.replace("\xa0", " ")    # non-breaking space → regular space
+        t = re.sub(r" {2,}", " ", t)  # collapse multiple spaces
+        t = t.strip()
         if t:
             text = t
             break
