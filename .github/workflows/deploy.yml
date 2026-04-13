@@ -1,0 +1,17 @@
+name: Deploy to production
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: bi.smartbrain.io
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: bash /opt/auto/update_GmailChecker.sh
