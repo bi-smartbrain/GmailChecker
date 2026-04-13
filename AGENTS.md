@@ -46,6 +46,22 @@ Google Sheets — единый источник конфигурации (hot-re
 - colorama для Windows-совместимости
 - Теги: loop(cyan), config(yellow), mailboxes(magenta), mb(green), gmail(blue), notify(cyan), send(green+bold), tg(magenta), state(blue), error(red+bold), warn(yellow)
 
+## CI/CD — автодеплой
+
+Деплой происходит **автоматически** при каждом `git push origin master` через GitHub Actions.
+
+### Workflow: `.github/workflows/deploy.yml`
+- Триггер: push в ветку `master`
+- SSH на `root@bi.smartbrain.io` → запускает `/opt/auto/update_GmailChecker.sh`
+- Секрет: `SSH_PRIVATE_KEY` в Settings → Secrets → Actions репозитория
+- Ключ: `~/.ssh/github_deploy` на сервере (ed25519, добавлен в `authorized_keys`)
+- Логи деплоя: GitHub → Actions вкладка репозитория
+
+### Ручной деплой (если нужен)
+```bash
+ssh root@bi.smartbrain.io "bash /opt/auto/update_GmailChecker.sh"
+```
+
 ## Деплой паттерн
 
 ### Dockerfile
