@@ -10,7 +10,7 @@ git reset --hard origin/master
 
 # 2. Пересобираем и перезапускаем сервис без лишнего даунтайма
 echo "2. Пересобираем и запускаем контейнер..."
-docker-compose up -d --build --remove-orphans
+docker compose up -d --build --remove-orphans
 
 # 3. Чистим неиспользуемые образы и build cache (safe)
 echo "3. Чистим Docker мусор (safe)..."
