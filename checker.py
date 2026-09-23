@@ -463,12 +463,6 @@ def main() -> int:
                 cprint(f"[mb:{email}] tg_chat_id={mb['tg_chat_id']!r} tags={mb['tags_string']!r}")
                 cprint(f"[mb:{email}] last_internal_ms={mb['last_internal_ms']} initialized={mb['initialized']} sent_ids={len(mb['last_sent_ids'])}")
 
-                # If sent_ids were cleared, reset initialization.
-                if not mb["last_sent_ids"]:
-                    cprint(f"[mb:{email}] sent_ids cleared, resetting initialization")
-                    mb["initialized"] = False
-                    mb["last_internal_ms"] = 0
-
                 # Build or reuse Gmail client.
                 if email not in gmail_clients:
                     cprint(f"[mb:{email}] creating new Gmail API client")

@@ -12,7 +12,7 @@ GmailChecker — монолитный сервис мониторинга Gmail-
 pip install -r requirements.txt
 python checker.py                    # локальный запуск (нужны секреты в ../secrets/)
 
-docker-compose up -d --build         # запуск в контейнере
+docker compose up -d --build         # запуск в контейнере (сервер на Compose v2 — плагин, не отдельный docker-compose)
 docker logs -f gmail-checker         # цветной лог в реальном времени
 
 python scripts/verify_mailbox.py     # валидация данных в Google Sheets
@@ -50,7 +50,7 @@ python scripts/sheets_setup.py       # (пере)инициализация ст
 4. **Telegram guardrail**: если `tg_chat` начинается с `-` (группа/канал) и `TG_ALLOW_NON_PERSONAL != true` — сообщение блокируется молча (только в лог), проверяется на каждый ящик в каждом цикле.
 5. **Parse mode — HTML, не MarkdownV2**: `**bold**` конвертируется в `<b>bold</b>` регэкспом (`markdown_bold_to_html`), а не через Telegram Markdown-парсер — он слишком хрупкий для динамического контента (subject/from из письма).
 6. **Bootstrap** (`skip_existing` vs остальное, checker.py:536-559): `skip_existing` создаёт checkpoint из самого свежего кандидата и **не шлёт** ничего при первой инициализации ящика; любое другое значение помечает ящик initialized без checkpoint — тогда шлётся всё, что найдётся.
-7. **last_sent_ids_json** хранит последние 50 ID отправленных писем — защита от дублей при одновременном совпадении по timestamp; очистка этого поля в Sheets на `[]` сбрасывает `initialized` и `last_internal_ms` автоматически на следующем цикле (checker.py:467-470).
+7. **last_sent_ids_json** хранит последние 50 ID отправленных писем — защита от дублей при одновременном совпадении по timestamp. `initialized` определяется исключительно как `last_internal_ms > 0` (см. `read_mailboxes_sheet`); чтобы вручную сбросить ящик, нужно очистить **оба** поля — `last_internal_ms` до `0` и `last_sent_ids_json` до `[]`. (До 2026-09-23 в коде был баг: пустой `last_sent_ids_json` сам по себе сбрасывал `initialized` каждый цикл — из-за этого `BOOTSTRAP=skip_existing` уходил в бесконечный цикл ре-бутстрапа для любого нового ящика: checkpoint переставлялся на новое письмо, но уведомление никогда не отправлялось, а `events` заполнялся `init_checkpoint`-строками каждый цикл. Убрано.)
 8. **IMAP заблокирован** Google Workspace на этом домене — только Gmail API + Domain-Wide Delegation через `service_account_freelance.json`.
 9. **Gmail API не помечает письма прочитанными** — это намеренное поведение, не баг.
 10. **Локальные фоллбэк-пути захардкожены под Windows-машину разработчика**: `C:\Rubrain\Secrets\...` (checker.py:70, 358) — используются только если `env_loader` не смог найти `../secrets/` или `/secrets/`; в норме секреты приходят через `env_loader.py`.
@@ -60,10 +60,10 @@ python scripts/sheets_setup.py       # (пере)инициализация ст
 
 - **Добавить ящик** — строка в лист `mailboxes` с `enabled=TRUE`. Перезапуск не нужен.
 - **Изменить интервал** — `POLL_INTERVAL_SECONDS` в листе `config`. Подхватится на следующем цикле.
-- **Сбросить состояние ящика** — очистить `last_sent_ids_json` до `[]` в `mailboxes`.
+- **Сбросить состояние ящика** — очистить `last_internal_ms` до `0` **и** `last_sent_ids_json` до `[]` в `mailboxes` (нужны оба поля, см. гочу 7).
 - **Отладка без спама в Telegram** — `TG_DRY_RUN=true` в `config`.
 - **Поменять текст уведомления** — правь [format.md](format.md), перезапуск не нужен (перечитывается по mtime).
 
 ## Сервер и деплой
 
-Подробности — в [AGENTS.md](AGENTS.md#сервер) и [AGENTS.md](AGENTS.md#cicd--автодеплой). Коротко: `git push origin master` → GitHub Actions → SSH на `root@bi.smartbrain.io` → `/opt/auto/update_GmailChecker.sh` (docker-compose down → git pull → build → up -d). Секреты на сервере — `/opt/secrets/`, монтируются в контейнер как `/secrets:ro`.
+Подробности — в [AGENTS.md](AGENTS.md#сервер) и [AGENTS.md](AGENTS.md#cicd--автодеплой). Коротко: `git push origin master` → GitHub Actions → SSH на `root@bi.smartbrain.io` → `/opt/auto/update_GmailChecker.sh` (git pull → `docker compose up -d --build --remove-orphans`). Секреты на сервере — `/opt/secrets/`, монтируются в контейнер как `/secrets:ro`. На сервере установлен Docker Compose v2 как плагин (`docker compose`), не отдельный бинарник `docker-compose` — старые куски документации/скриптов с дефисом были ошибкой.

@@ -125,7 +125,7 @@ cp "$(dirname "$0")/update_<Project>.sh" /opt/auto/update_<Project>.sh 2>/dev/nu
 Поменять `POLL_INTERVAL_SECONDS` в листе `config`. Подхватится на следующем цикле.
 
 ### Сбросить состояние ящика
-Очистить `last_sent_ids_json` до `[]` в листе `mailboxes`. `initialized` сбросится автоматически.
+Очистить **и** `last_internal_ms` до `0`, **и** `last_sent_ids_json` до `[]` в листе `mailboxes` — только очистки `last_sent_ids_json` недостаточно, `initialized` определяется по `last_internal_ms > 0`.
 
 ### Отладка
 - `docker logs -f gmail-checker` — цветной лог в реальном времени
