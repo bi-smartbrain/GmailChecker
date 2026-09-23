@@ -62,6 +62,9 @@ Google Sheets — единый источник конфигурации (hot-re
 ssh root@bi.smartbrain.io "bash /opt/auto/update_GmailChecker.sh"
 ```
 
+### Если автодеплой упал на SSH-рукопожатии
+`ssh: unable to authenticate, attempted methods [none publickey]` в логе Actions значит, что секрет `SSH_PRIVATE_KEY` репозитория не совпадает ни с одним ключом в `~/.ssh/authorized_keys` на сервере. Актуальный деплой-ключ лежит на сервере в `~/.ssh/github_deploy` (тот же ключ зарегистрирован на GitHub-аккаунте `bi-smartbrain` под именем "ai-server", Read/write, используется и для других проектов на этом сервере) — его содержимым и нужно перезаписать секрет `SSH_PRIVATE_KEY` в Settings → Secrets and variables → Actions репозитория.
+
 ## Деплой паттерн
 
 ### Dockerfile
@@ -97,14 +100,15 @@ services:
 ```
 
 ### update скрипт (/opt/auto/update_<Project>.sh)
+
+На сервере Docker Compose установлен как **плагин v2** (`docker compose`, без дефиса) — отдельного бинарника `docker-compose` нет. Шаблон:
+
 ```bash
 set -e
 cd /opt/<Project>
-docker-compose down
-git reset --hard HEAD
-git pull origin master
-docker-compose build
-docker-compose up -d
+git fetch origin master
+git reset --hard origin/master
+docker compose up -d --build --remove-orphans
 # Safe cleanup: remove unused images, keep builds for 168h
 docker image prune -f
 docker builder prune -f --filter "until=168h"
@@ -146,7 +150,10 @@ cp "$(dirname "$0")/update_<Project>.sh" /opt/auto/update_<Project>.sh 2>/dev/nu
 
 ## Ключевые функции
 
-- `strip_dotzero()` — utils.py, очистка `.0` из float значений Google Sheets
-- `load_gmail_client()` — создание/кэширование Gmail API клиента с DWD
+Все функции живут в одном файле `checker.py` (отдельного `utils.py` нет):
+
+- `build_gmail(sa_path, subject_user)` — создание Gmail API клиента с DWD-impersonation
+- `strip_dotzero()` — очистка `.0` из float значений Google Sheets
 - `extract_text_preview()` — извлечение текстового превью из письма (до 300 символов)
-- `send_telegram()` — отправка уведомления с HTML formatting и guardrails
+- `tg_send()` — отправка уведомления с HTML formatting и guardrails
+- `read_mailboxes_sheet()` / `load_key_value_sheet()` — парсинг листов `mailboxes` и `config`

@@ -55,6 +55,7 @@ python scripts/sheets_setup.py       # (пере)инициализация ст
 9. **Gmail API не помечает письма прочитанными** — это намеренное поведение, не баг.
 10. **Локальные фоллбэк-пути захардкожены под Windows-машину разработчика**: `C:\Rubrain\Secrets\...` (checker.py:70, 358) — используются только если `env_loader` не смог найти `../secrets/` или `/secrets/`; в норме секреты приходят через `env_loader.py`.
 11. **Subject matching** — Gmail query ищет `subject:"<phrase>"`, но после API-ответа код ещё раз проверяет точное вхождение фразы в заголовок (checker.py:526) — Gmail search не всегда 100% точен по подстроке.
+12. **Автодеплой падает на SSH-рукопожатии** (`ssh: unable to authenticate, attempted methods [none publickey]` в логе GitHub Actions) — значит секрет `SSH_PRIVATE_KEY` репозитория не совпадает с ключами в `~/.ssh/authorized_keys` на сервере. Актуальный ключ — `~/.ssh/github_deploy` на сервере (тот же ключ зарегистрирован на GitHub-аккаунте `bi-smartbrain` как "ai-server", Read/write). См. [AGENTS.md](AGENTS.md#если-автодеплой-упал-на-ssh-рукопожатии).
 
 ## Частые задачи
 
